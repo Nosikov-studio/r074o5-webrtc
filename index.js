@@ -6,18 +6,18 @@ const port = 30333;
 let clients = [];
 let latestFrame = null;
 
-// Настройка CORS - разрешаем запросы от камеры (можно заменить '*' на конкретный домен/адрес)
-app.use(cors({
-  origin: ['https://truruky.ru', 'https://www.truruky.ru', 'https://truruki.ru', 'https://www.truruki.ru', 'http://www.truruki.ru'],
-  methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type'],
-  credentials: false,
-}));
+// // Настройка CORS - разрешаем запросы от камеры (можно заменить '*' на конкретный домен/адрес)
+// app.use(cors({
+//   origin: ['https://truruky.ru', 'https://www.truruky.ru', 'https://truruki.ru', 'https://www.truruki.ru', 'http://www.truruki.ru'],
+//   methods: ['GET', 'POST', 'OPTIONS'],
+//   allowedHeaders: ['Content-Type'],
+//   credentials: false,
+// }));
 
 
 
 //Простая страница для просмотра трансляции
-app.get('/server', (req, res) => {
+app.get('/', (req, res) => {
   res.send(`
     <html>
       <body>

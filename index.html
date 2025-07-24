@@ -2,64 +2,75 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <title>Broadcaster</title></head>
+  <title>Viewer</title>
+</head>
 <body>
-    <p>Клиент зрителя (browser)+</p>
-  <h1>Broadcaster</h1>
-  <video id="video" autoplay muted playsinline style="width: 320px;"></video>
+  <h1>Viewer</h1>
+  <video id="video" autoplay playsinline controls style="width: 320px;"></video>
 
   <script>
     const ws = new WebSocket('ws://85.28.47.165:30333');
-    let pc = null;
     const video = document.getElementById('video');
+    let pc = new RTCPeerConnection();
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'broadcaster' }));
+      ws.send(JSON.stringify({ type: 'viewer' }));  // зритель уведомляет сервер о роли
     };
 
-    ws.onmessage = async (msg) => {
-      const data = JSON.parse(msg.data);
+    ws.onmessage = async (event) => {
+      const data = JSON.parse(event.data);
 
-      if (data.type === 'watcher') {
-        pc = new RTCPeerConnection();
+      switch(data.type) {
+        case 'offer':
+          // Получаем SDP оффер от транслятора
+          await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
 
-        // Добавляем в RTCPeerConnection поток с камеры
-        if (video.srcObject) {
-          video.srcObject.getTracks().forEach(track => pc.addTrack(track, video.srcObject));
-        }
+          // Создаем SDP answer
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
 
-        pc.onicecandidate = event => {
-          if (event.candidate) {
-            ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
+          // Отправляем answer обратно транслятору через сервер
+          ws.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription }));
+          break;
+
+        case 'candidate':
+          // Добавляем ICE кандидата
+          if (data.candidate) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            } catch(e) {
+              console.error('Ошибка добавления ICE кандидата:', e);
+            }
           }
-        };
+          break;
 
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
+        case 'broadcasterDisconnected':
+          console.log('Транслятор отключился');
+          // Можно очистить видео поток и pc
+          video.srcObject = null;
+          if (pc) {
+            pc.close();
+            pc = null;
+          }
+          break;
 
-        ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
-      }
-
-      if (data.type === 'answer') {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-      }
-
-      if (data.type === 'candidate') {
-        if (pc) {
-          await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-        }
+        default:
+          console.log('Неизвестный тип сообщения:', data.type);
       }
     };
 
-    async function startStream() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        video.srcObject = stream;
-      } catch (e) {
-        console.error('Error accessing media devices.', e);
+    // Добавляем поток к видео, когда он доступен из RTCPeerConnection
+    pc.ontrack = (event) => {
+      if (!video.srcObject) {
+        video.srcObject = event.streams[0];
       }
-    }
-    startStream();
+    };
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
+      }
+    };
   </script>
 </body>
 </html>

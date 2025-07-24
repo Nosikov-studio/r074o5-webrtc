@@ -33,3 +33,4 @@ https://www.perplexity.ai/search/konfig-nginx-server-listen-443-R.E5KMKvS6GF1agR
 1___camera.html - транслятор (truruky.ru)
 
 ********************************************************
+В последнем варианте -ВСЕ клиенты работают по крайней мере 1 минуту без обновления.

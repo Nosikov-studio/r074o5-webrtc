@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Viewer</title>
+</head>
+<body>
+  <h1>Viewer</h1>
+  <video id="video" autoplay playsinline controls style="width: 320px;"></video>
+
+  <script>
+    const ws = new WebSocket('wss://truruki.ru/server/');
+    const video = document.getElementById('video');
+
+    const configuration = {
+      iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+    // можно добавить TURN серверы при необходимости
+  ],
+};
+
+    let pc = new RTCPeerConnection(configuration);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'viewer' }));  // зритель уведомляет сервер о роли
+    };
+
+    ws.onmessage = async (event) => {
+      const data = JSON.parse(event.data);
+
+      switch(data.type) {
+        case 'offer':
+          // Получаем SDP оффер от транслятора
+          await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+
+          // Создаем SDP answer
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+
+          // Отправляем answer обратно транслятору через сервер
+          ws.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription }));
+          break;
+
+        case 'candidate':
+          // Добавляем ICE кандидата
+          if (data.candidate) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            } catch(e) {
+              console.error('Ошибка добавления ICE кандидата:', e);
+            }
+          }
+          break;
+
+        case 'broadcasterDisconnected':
+          console.log('Транслятор отключился');
+          // Можно очистить видео поток и pc
+          video.srcObject = null;
+          if (pc) {
+            pc.close();
+            pc = null;
+          }
+          break;
+
+        default:
+          console.log('Неизвестный тип сообщения:', data.type);
+      }
+    };
+
+    // Добавляем поток к видео, когда он доступен из RTCPeerConnection
+    pc.ontrack = (event) => {
+      if (!video.srcObject) {
+        video.srcObject = event.streams[0];
+      }
+    };
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
+      }
+    };
+  </script>
+</body>
+</html>

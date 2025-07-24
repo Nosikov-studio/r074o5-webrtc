@@ -9,77 +9,69 @@
   <video id="video" autoplay playsinline controls style="width: 320px;"></video>
 
   <script>
-    const ws = new WebSocket('wss://truruki.ru/server/');
-    const video = document.getElementById('video');
+const ws = new WebSocket('wss://truruki.ru/server/');
+  const video = document.getElementById('video');
+  let pc = null;
 
-    const configuration = {
-      iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-    // можно добавить TURN серверы при необходимости
-  ],
-};
+  const configuration = {
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+  };
 
-    let pc = new RTCPeerConnection(configuration);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'viewer' }));
+  };
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'viewer' }));  // зритель уведомляет сервер о роли
-    };
+  ws.onmessage = async (event) => {
+    const data = JSON.parse(event.data);
 
-    ws.onmessage = async (event) => {
-      const data = JSON.parse(event.data);
+    switch (data.type) {
+      case 'offer':
+        // Создаем RTCPeerConnection при первом оффере
+        if (!pc) {
+          pc = new RTCPeerConnection(configuration);
 
-      switch(data.type) {
-        case 'offer':
-          // Получаем SDP оффер от транслятора
-          await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-
-          // Создаем SDP answer
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-
-          // Отправляем answer обратно транслятору через сервер
-          ws.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription }));
-          break;
-
-        case 'candidate':
-          // Добавляем ICE кандидата
-          if (data.candidate) {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-            } catch(e) {
-              console.error('Ошибка добавления ICE кандидата:', e);
+          pc.ontrack = (event) => {
+            if (!video.srcObject) {
+              video.srcObject = event.streams[0];
             }
+          };
+
+          pc.onicecandidate = (event) => {
+            if (event.candidate) {
+              ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
+            }
+          };
+        }
+
+        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+
+        ws.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription }));
+        break;
+
+      case 'candidate':
+        if (pc) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+          } catch (e) {
+            console.error('Error adding ICE candidate:', e);
           }
-          break;
+        }
+        break;
 
-        case 'broadcasterDisconnected':
-          console.log('Транслятор отключился');
-          // Можно очистить видео поток и pc
-          video.srcObject = null;
-          if (pc) {
-            pc.close();
-            pc = null;
-          }
-          break;
+      case 'broadcasterDisconnected':
+        video.srcObject = null;
+        if (pc) {
+          pc.close();
+          pc = null;
+        }
+        break;
 
-        default:
-          console.log('Неизвестный тип сообщения:', data.type);
-      }
-    };
-
-    // Добавляем поток к видео, когда он доступен из RTCPeerConnection
-    pc.ontrack = (event) => {
-      if (!video.srcObject) {
-        video.srcObject = event.streams[0];
-      }
-    };
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
-      }
-    };
+      default:
+        console.log('Unknown message type:', data.type);
+    }
+  };
   </script>
 </body>
 </html>

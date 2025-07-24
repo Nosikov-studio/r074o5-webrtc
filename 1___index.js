@@ -1,9 +1,9 @@
+// server.js
 const http = require('http');
 const WebSocket = require('ws');
 const express = require('express');
 const app = express();
 const cors = require('cors');
-const { v4: uuidv4 } = require('uuid'); // для генерации уникальных ID
 
 app.use(cors({
   origin: ['https://truruky.ru', 'https://www.truruky.ru', 'https://truruki.ru', 'https://www.truruki.ru'],
@@ -15,22 +15,22 @@ app.use(cors({
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-let broadcaster = null;
-const viewers = new Map(); // id => ws
+
+
+let broadcaster = null;  // WebSocket клиента-транслятора
+let viewers = new Set(); // Set WebSocket клиентов-зрителей
 
 wss.on('connection', ws => {
-  ws.id = uuidv4();
-
   ws.on('message', message => {
     let data;
     try {
       data = JSON.parse(message);
-    } catch (e) {
+    } catch(e) {
       console.error('Invalid JSON', e);
       return;
     }
 
-    switch (data.type) {
+    switch(data.type) {
       case 'broadcaster':
         broadcaster = ws;
         ws.role = 'broadcaster';
@@ -38,55 +38,55 @@ wss.on('connection', ws => {
         break;
 
       case 'viewer':
+        viewers.add(ws);
         ws.role = 'viewer';
-        viewers.set(ws.id, ws);
-        console.log('Viewer connected:', ws.id);
-        if (broadcaster && broadcaster.readyState === WebSocket.OPEN) {
-          // Сообщаем транслятору о новом зрителе с его ID
-          broadcaster.send(JSON.stringify({ type: 'watcher', id: ws.id }));
+        console.log('Viewer connected');
+        // Сообщаем транслятору о новом зрителе
+        if (broadcaster) {
+          broadcaster.send(JSON.stringify({ type: 'watcher' }));
         }
         break;
 
       case 'offer':
-        // Broadcaster присылает оффер для конкретного зрителя
+        // Broadcaster получил оффер от зрителя (SDP)
         if (ws.role === 'broadcaster') {
-          const viewer = viewers.get(data.id);
-          if (viewer && viewer.readyState === WebSocket.OPEN) {
-            viewer.send(JSON.stringify({ type: 'offer', sdp: data.sdp }));
-          }
+          viewers.forEach(viewer => {
+            if (viewer.readyState === WebSocket.OPEN) {
+              viewer.send(JSON.stringify({ type: 'offer', sdp: data.sdp }));
+            }
+          });
         }
         break;
 
       case 'answer':
-        // Зритель отправляет answer для конкретного транслятора (единственного)
+        // Зритель отправляет серверу SDP, пересылаем транслятору
         if (ws.role === 'viewer' && broadcaster && broadcaster.readyState === WebSocket.OPEN) {
-          broadcaster.send(JSON.stringify({ type: 'answer', sdp: data.sdp, id: ws.id }));
+          broadcaster.send(JSON.stringify({ type: 'answer', sdp: data.sdp }));
         }
         break;
 
       case 'candidate':
-        // ICE кандидаты маршрутизируются по ролям и ID
+        // ICE кандидаты пересылаются соответствующим сторонам
         if (ws.role === 'broadcaster') {
-          // Транслятор пересылает кандидатам конкретным зрителям
-          viewers.forEach((viewer, id) => {
-            if (viewer.readyState === WebSocket.OPEN && data.id === id) {
+          viewers.forEach(viewer => {
+            if (viewer.readyState === WebSocket.OPEN) {
               viewer.send(JSON.stringify({ type: 'candidate', candidate: data.candidate }));
             }
           });
         } else if (ws.role === 'viewer' && broadcaster && broadcaster.readyState === WebSocket.OPEN) {
-          broadcaster.send(JSON.stringify({ type: 'candidate', candidate: data.candidate, id: ws.id }));
+          broadcaster.send(JSON.stringify({ type: 'candidate', candidate: data.candidate }));
         }
         break;
 
       default:
-        console.log('Unknown message type:', data.type);
-        break;
+        console.log('Unknown message type: ', data.type);
     }
   });
 
   ws.on('close', () => {
     if (ws.role === 'broadcaster') {
       broadcaster = null;
+      // Уведомляем всех зрителей, что транслятор отключился
       viewers.forEach(viewer => {
         if (viewer.readyState === WebSocket.OPEN) {
           viewer.send(JSON.stringify({ type: 'broadcasterDisconnected' }));
@@ -94,10 +94,7 @@ wss.on('connection', ws => {
       });
     }
     if (ws.role === 'viewer') {
-      viewers.delete(ws.id);
-      if (broadcaster && broadcaster.readyState === WebSocket.OPEN) {
-        broadcaster.send(JSON.stringify({ type: 'disconnect', id: ws.id }));
-      }
+      viewers.delete(ws);
     }
   });
 });

@@ -11,7 +11,16 @@
   <script>
     const ws = new WebSocket('wss://truruki.ru/server/');
     const video = document.getElementById('video');
-    let pc = new RTCPeerConnection();
+
+    const configuration = {
+      iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+    // можно добавить TURN серверы при необходимости
+  ],
+};
+
+    let pc = new RTCPeerConnection(configuration);
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ type: 'viewer' }));  // зритель уведомляет сервер о роли

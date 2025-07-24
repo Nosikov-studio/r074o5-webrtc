@@ -3,9 +3,19 @@ const http = require('http');
 const WebSocket = require('ws');
 const express = require('express');
 const app = express();
+const cors = require('cors');
+
+app.use(cors({
+  origin: ['https://truruky.ru', 'https://www.truruky.ru', 'https://truruki.ru', 'https://www.truruki.ru'],
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
+  credentials: false,
+}));
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
+
+
 
 let broadcaster = null;  // WebSocket клиента-транслятора
 let viewers = new Set(); // Set WebSocket клиентов-зрителей

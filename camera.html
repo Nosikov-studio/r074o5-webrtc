@@ -1,85 +1,143 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8">
-  <title>Broadcaster</title></head>
+  <meta charset="utf-8" />
+  <title>Broadcaster</title>
+</head>
 <body>
-  <p>Клиент транслятора (browser)</p>
   <h1>Broadcaster</h1>
   <video id="video" autoplay muted playsinline style="width: 320px;"></video>
 
   <script>
-   const ws = new WebSocket('wss://truruki.ru/server/');
-  const video = document.getElementById('video');
-  const pcs = new Map(); // id зрителя => RTCPeerConnection
+    const ws = new WebSocket('wss://truruki.ru/server/');
+    const video = document.getElementById('video');
 
-  const configuration = {
-    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-  };
+    // Карта RTCPeerConnection для каждого зрителя (ключ - id зрителя)
+    const pcs = new Map();
 
-  ws.onopen = () => {
-    ws.send(JSON.stringify({ type: 'broadcaster' }));
-  };
+    // Конфигурация ICE серверов
+    const configuration = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        // Добавьте TURN серверы при необходимости
+      ],
+    };
 
-  ws.onmessage = async (msg) => {
-    const data = JSON.parse(msg.data);
+    // Локальный медиа-поток (камера + микрофон)
+    let localStream = null;
 
-    if (data.type === 'watcher') {
-      // Новый зритель, создаём RTCPeerConnection для него
-      const pc = new RTCPeerConnection(configuration);
-      pcs.set(data.id, pc);
+    ws.onopen = () => {
+      // Уведомляем сервер, что это broadcast-клиент
+      ws.send(JSON.stringify({ type: 'broadcaster' }));
+    };
 
-      // Добавляем треки из вашего локального видео (если они есть)
-      if (video.srcObject) {
-        video.srcObject.getTracks().forEach(track => pc.addTrack(track, video.srcObject));
-      }
+    ws.onmessage = async (msg) => {
+      const data = JSON.parse(msg.data);
 
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate, id: data.id }));
+      switch (data.type) {
+        case 'watcher': {
+          const watcherId = data.id;
+          console.log('Новый зритель:', watcherId);
+
+          // Создаем RTCPeerConnection для этого зрителя
+          const pc = new RTCPeerConnection(configuration);
+          pcs.set(watcherId, pc);
+
+          // Добавляем локальные треки (видео и аудио) в PeerConnection
+          localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+          // Отправка ICE кандидатов зрителю
+          pc.onicecandidate = (event) => {
+            if (event.candidate) {
+              ws.send(JSON.stringify({
+                type: 'candidate',
+                candidate: event.candidate,
+                id: watcherId
+              }));
+            }
+          };
+
+          // Создание SDP оффера и отправка зрителю
+          try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            ws.send(JSON.stringify({
+              type: 'offer',
+              sdp: pc.localDescription,
+              id: watcherId
+            }));
+          } catch (err) {
+            console.error('Ошибка при создании оффера для зрителя', watcherId, err);
+          }
+
+          break;
         }
-      };
 
-      // Создаём предложение (offer) и отправляем зрителю
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
+        case 'answer': {
+          const watcherId = data.id;
+          const pc = pcs.get(watcherId);
+          if (!pc) {
+            console.warn('PC для зрителя не найден:', watcherId);
+            return;
+          }
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+          } catch (err) {
+            console.error('Ошибка при установке remoteDescription', err);
+          }
+          break;
+        }
 
-      ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription, id: data.id }));
-    }
+        case 'candidate': {
+          const watcherId = data.id;
+          const pc = pcs.get(watcherId);
+          if (pc && data.candidate) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            } catch (err) {
+              console.error('Ошибка при добавлении ICE кандидата', err);
+            }
+          }
+          break;
+        }
 
-    if (data.type === 'answer') {
-      const pc = pcs.get(data.id);
-      if (pc) {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        case 'disconnect': {
+          const watcherId = data.id;
+          const pc = pcs.get(watcherId);
+          if (pc) {
+            pc.close();
+            pcs.delete(watcherId);
+            console.log('Зритель отключился и RTCPeerConnection закрыт:', watcherId);
+          }
+          break;
+        }
+
+        default:
+          console.warn('Неизвестное сообщение с сервера:', data);
+          break;
+      }
+    };
+
+    // Запускаем локальный поток с камеры и микрофона
+    async function startStream() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        video.srcObject = localStream;
+        console.log('Локальный поток запущен');
+      } catch (err) {
+        console.error('Ошибка доступа к медиапотокам:', err);
       }
     }
 
-    if (data.type === 'candidate') {
-      const pc = pcs.get(data.id);
-      if (pc) {
-        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-      }
-    }
+    startStream();
 
-    if (data.type === 'disconnect') {
-      const pc = pcs.get(data.id);
-      if (pc) {
-        pc.close();
-        pcs.delete(data.id);
-      }
-    }
-  };
-
-  async function startStream() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      video.srcObject = stream;
-    } catch (e) {
-      console.error('Error accessing media devices.', e);
-    }
-  }
-
-  startStream();
+    // Опционально: обработка закрытия окна/перезагрузки для корректного закрытия соединений
+    window.addEventListener('beforeunload', () => {
+      pcs.forEach(pc => pc.close());
+      pcs.clear();
+      ws.close();
+    });
   </script>
 </body>
 </html>

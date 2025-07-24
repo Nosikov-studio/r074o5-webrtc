@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Broadcaster</title></head>
+<body>
+  <p>Клиент транслятора (browser)</p>
+  <h1>Broadcaster</h1>
+  <video id="video" autoplay muted playsinline style="width: 320px;"></video>
+
+  <script>
+   const ws = new WebSocket('wss://truruki.ru/server/');
+  const video = document.getElementById('video');
+  const pcs = new Map(); // id зрителя => RTCPeerConnection
+
+  const configuration = {
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+  };
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'broadcaster' }));
+  };
+
+  ws.onmessage = async (msg) => {
+    const data = JSON.parse(msg.data);
+
+    if (data.type === 'watcher') {
+      // Новый зритель, создаём RTCPeerConnection для него
+      const pc = new RTCPeerConnection(configuration);
+      pcs.set(data.id, pc);
+
+      // Добавляем треки из вашего локального видео (если они есть)
+      if (video.srcObject) {
+        video.srcObject.getTracks().forEach(track => pc.addTrack(track, video.srcObject));
+      }
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate, id: data.id }));
+        }
+      };
+
+      // Создаём предложение (offer) и отправляем зрителю
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription, id: data.id }));
+    }
+
+    if (data.type === 'answer') {
+      const pc = pcs.get(data.id);
+      if (pc) {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+      }
+    }
+
+    if (data.type === 'candidate') {
+      const pc = pcs.get(data.id);
+      if (pc) {
+        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+      }
+    }
+
+    if (data.type === 'disconnect') {
+      const pc = pcs.get(data.id);
+      if (pc) {
+        pc.close();
+        pcs.delete(data.id);
+      }
+    }
+  };
+
+  async function startStream() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      video.srcObject = stream;
+    } catch (e) {
+      console.error('Error accessing media devices.', e);
+    }
+  }
+
+  startStream();
+  </script>
+</body>
+</html>
